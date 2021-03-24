@@ -1,0 +1,266 @@
+# cipherSuites come from https://ssl-config.mozilla.org/#server=traefik&version=1.7.21&config=intermediate&guideline=5.4
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traefik
+  namespace: kube-system
+  labels:
+    cognite: traefik
+data:
+  traefik.toml: |
+    # traefik.toml
+    logLevel = "info"
+    defaultEntryPoints = ["http","https"]
+    [entryPoints]
+      [entryPoints.http]
+        address = ":80"
+        compress = true
+      [entryPoints.https]
+        address = ":443"
+        compress = true
+        [entryPoints.https.tls]
+          minVersion = "VersionTLS12"
+          sniStrict = true
+          cipherSuites = [
+            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305",
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+          ] 
+      [entryPoints.traefik]
+        address = ":8080"
+        compress = true
+      [entryPoints.prometheus]
+        address = ":9100"
+    [ping]
+      entryPoint = "http"
+    [kubernetes]
+      ingressClass = "traefik"
+      [kubernetes.ingressEndpoint]
+        publishedService = "kube-system/traefik"
+    [traefikLog]
+      format = "json"
+    [api]
+      entryPoint = "traefik"
+      dashboard = true
+    [acme]
+      email = "treblera@gmail.com"
+      storage = "/acme/acme.json"
+      entryPoint = "https"
+      onHostRule = true
+      caServer = "https://acme-v02.api.letsencrypt.org/directory"
+      [acme.httpChallenge]
+        entryPoint = "http"
+    [metrics]
+      [metrics.prometheus]
+        entryPoint = "prometheus"
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: traefik
+  namespace: kube-system
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: traefik
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+      - services
+      - endpoints
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - extensions
+    resources:
+      - ingresses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - extensions
+    resources:
+      - ingresses/status
+    verbs:
+      - update
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: traefik
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traefik
+subjects:
+  - kind: ServiceAccount
+    name: traefik
+    namespace: kube-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik
+  namespace: kube-system
+  labels:
+    cognite: traefik
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    cognite: traefik
+  ports:
+    - port: 443
+      name: https
+      targetPort: https
+    - port: 80
+      name: http
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-dashboard
+  namespace: kube-system
+  labels:
+    cognite: traefik
+spec:
+  type: ClusterIP
+  ports:
+    - name: dashboard
+      port: 80
+      targetPort: dashboard
+  selector:
+    cognite: traefik
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-prometheus
+  namespace: kube-system
+  labels:
+    cognite: traefik
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+  selector:
+    cognite: traefik
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik
+  namespace: kube-system
+  labels:
+    cognite: traefik
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      cognite: traefik
+  template:
+    metadata:
+      labels:
+        cognite: traefik
+    spec:
+      serviceAccountName: traefik
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        doks.digitalocean.com/node-pool: nodepool0
+      containers:
+        - name: traefik
+          image: traefik:1.7.28-alpine
+          args:
+            - --configfile=/config/traefik.toml
+          ports:
+            - name: http
+              containerPort: 80
+            - name: httpn
+              containerPort: 8880
+            - name: https
+              containerPort: 443
+            - name: dashboard
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9100
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 500m
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            failureThreshold: 6
+            initialDelaySeconds: 30
+            timeoutSeconds: 2
+          volumeMounts:
+            - mountPath: /config
+              name: config
+            - mountPath: /acme
+              name: acme
+      volumes:
+        - name: config
+          configMap:
+            name: traefik
+        - name: acme
+          persistentVolumeClaim:
+            claimName: traefik
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: traefik
+  namespace: kube-system
+  labels:
+    cognite: traefik
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: do-block-storage
+---
+kind: ServiceMonitor
+apiVersion: monitoring.coreos.com/v1
+metadata:
+  name: traefik
+  namespace: prometheus-operator
+  labels:
+    cognite: traefik
+spec:
+  endpoints:
+    - port: metrics
+      path: /metrics
+  jobLabel: traefik
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  selector:
+    matchLabels:
+      cognite: traefik

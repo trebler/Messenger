@@ -1,0 +1,79 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: authservice
+  namespace: cognite
+  labels:
+    cognite: authservice
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    cognite: authservice
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: authservice
+  namespace: cognite
+  labels:
+    cognite: authservice
+data:
+  CLIENT: messenger
+  KEYCLOAK_HOST: https://auth.trebler.dev
+  REALM: messenger
+  PORT: "80"
+  TOKEN_CACHE_SIZE: "100"
+  COOLDOWN_DURATION_MINS: "60"
+
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: authservice
+  namespace: cognite
+  labels:
+    cognite: authservice
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      cognite: authservice
+  template:
+    metadata:
+      namespace: cognite
+      labels:
+        cognite: authservice
+    spec:
+      containers:
+        - name: authservice
+          image: trebler/authservice:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: authservice
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 30Mi
+            limits:
+              cpu: 100m
+              memory: 100Mi
+      nodeSelector:
+        doks.digitalocean.com/node-pool: nodepool0

@@ -1,0 +1,172 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    cognite: keycloak
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+  storageClassName: do-block-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    cognite: keycloak
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    cognite: keycloak
+---
+kind: Ingress
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    cognite: keycloak
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/redirect-entry-point: https
+    traefik.ingress.kubernetes.io/redirect-permanent: "true"
+spec:
+  rules:
+    - host: auth.trebler.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    cognite: keycloak
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      cognite: keycloak
+  template:
+    metadata:
+      namespace: keycloak
+      labels:
+        cognite: keycloak
+    spec:
+      initContainers:
+        - name: mysql-pv-init
+          image: alpine:3.13.2
+          args: ["mkdir", "-p", "/pv/mysql"]
+          volumeMounts:
+            - name: keycloak
+              mountPath: /pv
+      containers:
+        - name: keycloak
+          image: jboss/keycloak:12.0.4
+          env:
+            - name: KEYCLOAK_USER
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: username
+            - name: KEYCLOAK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: password
+            - name: DB_VENDOR
+              value: mysql
+            - name: DB_USER
+              value: user
+            - name: DB_PASSWORD
+              value: password
+            - name: DB_ADDR
+              value: localhost
+            - name: PROXY_ADDRESS_FORWARDING
+              value: "true"
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1024Mi
+          livenessProbe:
+            httpGet:
+              path: /auth/
+              port: http
+            initialDelaySeconds: 300
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /auth/realms/master
+              port: http
+            initialDelaySeconds: 30
+        - name: mysql
+          image: mysql:5.7.33
+          env:
+            - name: MYSQL_ALLOW_EMPTY_PASSWORD
+              value: "1"
+            - name: MYSQL_DATABASE
+              value: keycloak
+            - name: MYSQL_USER
+              value: user
+            - name: MYSQL_PASSWORD
+              value: password
+          volumeMounts:
+            - name: keycloak
+              mountPath: /var/lib/mysql
+              subPath: mysql
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+            initialDelaySeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+            initialDelaySeconds: 5
+      volumes:
+        - name: keycloak
+          persistentVolumeClaim:
+            claimName: keycloak
+      nodeSelector:
+        doks.digitalocean.com/node-pool: nodepool0

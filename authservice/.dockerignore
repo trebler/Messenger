@@ -1,0 +1,10 @@
+node_modules
+build
+yarn-error.log
+Dockerfile*
+.dockerignore
+.gitignore
+.gitmodules
+README.md
+.DS_Store
+createPushDockerImage.sh
