@@ -94,7 +94,14 @@ const app = App()
             }
 
             try {
-                const received = JSON.parse(Buffer.from(message).toString()) as unknown;
+                const messageString = Buffer.from(message).toString();
+
+                if (debug) {
+                    const { userName } = ws;
+                    consolePrint(`User ${userName} sent ${messageString}`);
+                }
+
+                const received = JSON.parse(messageString) as unknown;
 
                 assertMessageReceive(received);
 
